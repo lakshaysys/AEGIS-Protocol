@@ -1,0 +1,10 @@
+# 1. Install dependencies and compile smart contracts
+npm install
+npx hardhat compile
+
+# 2. Run the scalable multi-agent orchestrator
+python orchestrator/aegis_node_scaler.py
+
+# 3. Launch the Visual Command Center & Telemetry Dashboard
+cd dashboard
+node server.js
