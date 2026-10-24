@@ -2,12 +2,16 @@ import sys
 import json
 import hashlib
 
-def send_json_rpc_response(request_id, result):
+def send_json_rpc_response(request_id, result, error=None):
     response = {
         "jsonrpc": "2.0",
-        "id": request_id,
-        "result": result
+        "id": request_id
     }
+    if error:
+        response["error"] = error
+    else:
+        response["result"] = result
+        
     print(json.dumps(response))
     sys.stdout.flush()
 
@@ -19,7 +23,7 @@ def handle_mcp_request(line):
 
         if method == "initialize":
             send_json_rpc_response(req_id, {
-                "protocolVersion": "2026-07-28",
+                "protocolVersion": "2024-11-05", # Updated to standard MCP date format
                 "capabilities": {
                     "tools": {},
                     "resources": {},
@@ -27,7 +31,7 @@ def handle_mcp_request(line):
                 },
                 "serverInfo": {
                     "name": "Project-AEGIS-MCP-Server",
-                    "version": "1.0.0"
+                    "version": "1.0.1"
                 }
             })
 
@@ -58,10 +62,8 @@ def handle_mcp_request(line):
                 task_id = arguments.get("taskId", "unknown")
                 agent = arguments.get("agentAddress", "0x000")
                 
-                # Generate simulated ZK hash proof output
                 proof_hash = hashlib.sha256(f"{task_id}-{agent}".encode()).hexdigest()
 
-                # MCP UI component payload for rich host rendering
                 ui_card = {
                     "type": "application/vnd.mcp-ui.card",
                     "title": "A.E.G.I.S. Cryptographic Verification",
@@ -80,7 +82,15 @@ def handle_mcp_request(line):
                     "content": [{"type": "text", "text": f"Proof successfully verified for task {task_id}."}],
                     "ui": ui_card
                 })
+            else:
+                # FIX: Return standard JSON-RPC method not found error
+                send_json_rpc_response(req_id, None, {
+                    "code": -32601,
+                    "message": f"Method/Tool '{tool_name}' not found."
+                })
 
+    except json.JSONDecodeError:
+        sys.stderr.write("MCP Error: Invalid JSON received.\n")
     except Exception as e:
         sys.stderr.write(f"MCP Error: {str(e)}\n")
 
