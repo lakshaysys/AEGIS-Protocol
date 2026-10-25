@@ -1,47 +1,62 @@
-import sqlite3
-import hashlib
-import json
+# agent_cache.py
+import asyncio
+import time
+import logging
+from collections import OrderedDict
+from typing import Any, Optional
+
+logging.basicConfig(level=logging.INFO)
 
 class AegisCacheManager:
-    def __init__(self, db_name="aegis_local.db"):
-        self.conn = sqlite3.connect(db_name)
-        self.create_table()
+    """
+    An asynchronous, memory-safe LRU cache with TTL for A.E.G.I.S. execution logging.
+    Prevents memory leaks in long-running autonomous agent nodes.
+    """
+    def __init__(self, max_size: int = 1000, default_ttl: int = 3600):
+        self.max_size = max_size
+        self.default_ttl = default_ttl
+        self._cache: OrderedDict[str, dict] = OrderedDict()
+        self._lock = asyncio.Lock()
+        logging.info(f"A.E.G.I.S. Cache Manager initialized (Max Size: {max_size}, TTL: {default_ttl}s)")
 
-    def create_table(self):
-        with self.conn:
-            self.conn.execute("""
-                CREATE TABLE IF NOT EXISTS execution_logs (
-                    task_id TEXT PRIMARY KEY,
-                    raw_logs TEXT,
-                    status TEXT
-                )
-            """)
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        async with self._lock:
+            expire_at = time.time() + (ttl if ttl is not None else self.default_ttl)
+            
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            
+            self._cache[key] = {"value": value, "expire_at": expire_at}
+            
+            # Evict oldest items if max size is exceeded
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
 
-    def log_execution(self, task_id, verbose_data):
-        with self.conn:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO execution_logs (task_id, raw_logs, status) VALUES (?, ?, ?)",
-                (task_id, json.dumps(verbose_data), "ACTIVE")
-            )
+    async def get(self, key: str) -> Optional[Any]:
+        async with self._lock:
+            if key not in self._cache:
+                return None
+            
+            item = self._cache[key]
+            
+            # Check for expiration
+            if time.time() > item["expire_at"]:
+                del self._cache[key]
+                return None
+            
+            # Mark as recently used
+            self._cache.move_to_end(key)
+            return item["value"]
 
-    def prune_and_sign(self, task_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT raw_logs FROM execution_logs WHERE task_id = ?", (task_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        
-        # Generate compact cryptographic summary (ZK Pruning simulation)
-        raw_data = row[0]
-        summary_hash = hashlib.sha256(raw_data.encode()).hexdigest()
-        
-        # Wipe heavy raw logs (Ephemeral cleanup)
-        with self.conn:
-            self.conn.execute("DELETE FROM execution_logs WHERE task_id = ?", (task_id,))
-        
-        return {"task_id": task_id, "zk_summary_hash": summary_hash, "status": "PRUNED_AND_SETTLED"}
+    async def clear_expired(self) -> int:
+        """Background task to purge expired entries."""
+        async with self._lock:
+            current_time = time.time()
+            expired_keys = [k for k, v in self._cache.items() if current_time > v["expire_at"]]
+            for k in expired_keys:
+                del self._cache[k]
+            return len(expired_keys)
 
-if __name__ == "__main__":
-    manager = AegisCacheManager()
-    manager.log_execution("task_001", {"steps": ["load_model", "inference", "verify"], "tokens_used": 1420})
-    print("Pruned Summary Result:", manager.prune_and_sign("task_001"))
+# Example usage within the orchestrator:
+# cache = AegisCacheManager(max_size=500, default_ttl=1800)
+# await cache.set("task_123_proof", proof_hash, ttl=600)
