@@ -1,0 +1,60 @@
+# .github/workflows/aegis-ci.yml
+name: A.E.G.I.S. Protocol CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  smart-contracts:
+    name: Smart Contract Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Compile Solidity Contracts
+        run: npx hardhat compile
+      - name: Run Hardhat Test Suite
+        run: npx hardhat test
+
+  zk-circuits:
+    name: ZK-Circuit Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Circom
+        run: |
+          git clone https://github.com/iden3/circom.git
+          cd circom
+          cargo build --release
+          cargo install --path circom
+      - name: Install Circomlib
+        run: npm install circomlib
+      - name: Compile Circom Circuit
+        run: circom circuits/aegis_verifier.circom --r1cs --wasm --sym -o build/
+
+  python-backend:
+    name: Python Backend Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install aiosqlite pytest
+      - name: Syntax and Import Check
+        run: |
+          python -m py_compile orchestrator/aegis_node_scaler.py
+          python -m py_compile mcp/aegis_mcp_server.py
+          python -m py_compile agent_cache.py
